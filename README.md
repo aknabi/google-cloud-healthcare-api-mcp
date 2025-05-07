@@ -9,7 +9,67 @@ This is a slightly modified version of the AgentCare MCP Server for EHRs. https:
 The main difference is that this repo can talk to both Google Cloud Healthcare FHIR APIs (through a SmartOnFHIR gateway secured by Firebase Auth) and HAPI FHIR servers (either public or self-hosted).
 
 ## Architecture
-<img src="screenshots/architecture.png" alt="Architecture" width="700">
+
+```mermaid
+graph TD
+    subgraph "MCP Clients"
+        Claude["Claude"]
+        Goose["Goose"]
+        OtherClients["Other MCP Clients"]
+    end
+
+    subgraph "MCP Server"
+        AgentCare["AgentCare MCP Server"]
+        FhirClient["FHIR Client"]
+        ToolHandler["Tool Handler"]
+        
+        subgraph "Medical Research APIs"
+            PubMed["PubMed API"]
+            ClinicalTrials["Clinical Trials API"]
+            FDA["FDA API"]
+        end
+    end
+
+    subgraph "FHIR Servers"
+        subgraph "Google Cloud Healthcare API"
+            GCHAPI["Google Cloud Healthcare API"]
+            FirebaseAuth["Firebase Auth"]
+        end
+        
+        subgraph "HAPI FHIR Servers"
+            PublicHAPI["Public HAPI FHIR Server"]
+            SelfHostedHAPI["Self-Hosted HAPI FHIR Server"]
+        end
+    end
+
+    Claude --> AgentCare
+    Goose --> AgentCare
+    OtherClients --> AgentCare
+    
+    AgentCare --> ToolHandler
+    ToolHandler --> FhirClient
+    ToolHandler --> PubMed
+    ToolHandler --> ClinicalTrials
+    ToolHandler --> FDA
+    
+    FhirClient --> GCHAPI
+    FhirClient --> PublicHAPI
+    FhirClient --> SelfHostedHAPI
+    
+    FirebaseAuth --> GCHAPI
+
+    classDef client fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef server fill:#bbf,stroke:#333,stroke-width:2px;
+    classDef api fill:#bfb,stroke:#333,stroke-width:2px;
+    classDef fhir fill:#fbb,stroke:#333,stroke-width:2px;
+    
+    class Claude,Goose,OtherClients client;
+    class AgentCare,ToolHandler,FhirClient server;
+    class PubMed,ClinicalTrials,FDA api;
+    class GCHAPI,PublicHAPI,SelfHostedHAPI,FirebaseAuth fhir;
+```
+
+The architecture now supports both Google Cloud Healthcare API (with Firebase Auth) and HAPI FHIR Servers (both public and self-hosted).
 
 ## Demo
 - Claude: demo/claude-demo.mp4
