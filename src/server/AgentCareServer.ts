@@ -19,7 +19,7 @@ export class AgentCareServer {
   
   constructor(mcpServer: Server, authConfig:FirebaseAuthConfig,fhirURL: string, pubmedAPIKey: string, trialsAPIKey: string, fdaAPIKey: string) {
     this.mcpServer = mcpServer;
-    this.fhirClient = new FhirClient(fhirURL);
+    this.fhirClient = new FhirClient(fhirURL, true); // Enable authentication for HAPI FHIR if needed
     this.cache = new CacheManager();
     this.pubmedApi = new PubMed(pubmedAPIKey);
     this.trialsApi = new ClinicalTrials(trialsAPIKey);
@@ -53,4 +53,4 @@ export class AgentCareServer {
     await this.mcpServer.connect(transport);
     console.error("FHIR MCP server running on stdio");
   }
-} 
+}

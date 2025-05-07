@@ -15,7 +15,7 @@ export class AgentCareServer {
     fdaApi;
     constructor(mcpServer, authConfig, fhirURL, pubmedAPIKey, trialsAPIKey, fdaAPIKey) {
         this.mcpServer = mcpServer;
-        this.fhirClient = new FhirClient(fhirURL);
+        this.fhirClient = new FhirClient(fhirURL, true); // Enable authentication for HAPI FHIR if needed
         this.cache = new CacheManager();
         this.pubmedApi = new PubMed(pubmedAPIKey);
         this.trialsApi = new ClinicalTrials(trialsAPIKey);

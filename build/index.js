@@ -13,7 +13,8 @@ const authConfig = {
     measurementId: process.env.FIREBASE_MEASUREMENT_ID,
     callbackPort: process.env.FIREBASE_AUTH_CALLBACK_PORT
 };
-const FHIR_BASE_URL = process.env.FHIR_BASE_URL;
+// Support for both Google Cloud Healthcare API and HAPI FHIR server
+const FHIR_BASE_URL = process.env.FHIR_BASE_URL || "http://hapi.fhir.org/baseR4"; // Default to HAPI FHIR public server if no URL is provided
 const PUBMED_API_KEY = process.env.PUBMED_API_KEY;
 const TRIALS_API_KEY = process.env.CLINICAL_TRIALS_API_KEY;
 const FDA_API_KEY = process.env.FDA_API_KEY;

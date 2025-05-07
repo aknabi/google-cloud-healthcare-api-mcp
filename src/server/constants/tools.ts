@@ -230,5 +230,21 @@ export const TOOL_DEFINITIONS = [
       },
       required: ['genericName']
     }
+  },
+  {
+    name: 'set_access_token',
+    description: 'Set the access token for authenticated FHIR requests (for patient/caregiver access)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        token: { type: 'string', description: 'OAuth 2.0 access token' },
+        tokenType: { 
+          type: 'string', 
+          description: 'Token type (default: Bearer)',
+          enum: ['Bearer', 'Basic', 'MAC']
+        }
+      },
+      required: ['token']
+    }
   }
-]; 
+];

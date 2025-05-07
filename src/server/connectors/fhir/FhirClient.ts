@@ -1,88 +1,137 @@
 import axios, { AxiosInstance } from "axios";
 import { ResourceType } from "../../types.js";
-import {calculateTimeframeDate} from "./Helper.js"
+import { calculateTimeframeDate } from "./Helper.js";
 
 export class FhirClient { 
   private client: AxiosInstance;
-  private accessToken!: string;
+  private accessToken: string | null = null;
+  private useAuth: boolean = false;
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, useAuth: boolean = false) {
+    this.useAuth = useAuth;
+    
+    // Initialize axios client with base configuration
     this.client = axios.create({
       baseURL: baseUrl,
       headers: {
-        //Authorization: `Bearer ${apiKey}`,
         Accept: "application/fhir+json",
-        Authorization: `Bearer ${this.accessToken}`
       },
     });
   }
 
-  setAccessToken(token: string) {
+  /**
+   * Set the access token for authenticated requests
+   * 
+   * @param token - OAuth2 access token
+   * @param tokenType - Token type (default: 'Bearer')
+   */
+  setAccessToken(token: string, tokenType: string = 'Bearer') {
     this.accessToken = token;
-    this.client.defaults.headers.Authorization = `Bearer ${this.accessToken}`;
+    if (this.accessToken) {
+      this.client.defaults.headers.Authorization = `${tokenType} ${this.accessToken}`;
+      this.useAuth = true;
+    }
   }
 
   async search(resourceType: string, params = {}) {
-    const searchParams = new URLSearchParams(params);
-    const response = await this.client.get(`/${resourceType}?${searchParams}`)
-    
-    return response.data;
+    try {
+      const searchParams = new URLSearchParams(params);
+      const response = await this.client.get(`/${resourceType}?${searchParams}`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error searching ${resourceType}:`, error);
+      throw error;
+    }
   }
 
   async get(resourceType: string, id: string) {
-    const response = await this.client.get(`/${resourceType}/${id}`)
-  
-    return response.data
+    try {
+      const response = await this.client.get(`/${resourceType}/${id}`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error getting ${resourceType}/${id}:`, error);
+      throw error;
+    }
   }
 
   async executeQuery(queryParams: any) {
-    const params = this.buildSearchParams(queryParams);
-    const response = await this.client.get(`/${queryParams.resourceType}?${params}`);
-    return this.formatResults(response.data, queryParams.resourceType);
+    try {
+      const params = this.buildSearchParams(queryParams);
+      const response = await this.client.get(`/${queryParams.resourceType}?${params}`);
+      return this.formatResults(response.data, queryParams.resourceType);
+    } catch (error) {
+      console.error("Error executing query:", error);
+      return this.handleError(error);
+    }
   }
 
   async getActiveConditions() {
-    const response = await this.client.get('/Condition?clinical-status=active');
-    return this.formatResponse("fhir://Condition/active", response.data);
+    try {
+      // HAPI FHIR uses clinical-status=active
+      const response = await this.client.get('/Condition?clinical-status=active');
+      return this.formatResponse("fhir://Condition/active", response.data);
+    } catch (error) {
+      console.error("Error getting active conditions:", error);
+      return this.handleError(error);
+    }
   }
 
   async findPatient(args: any) {
-    const params = new URLSearchParams();
-    if (args.lastName) params.append('family', args.lastName);
-    if (args.firstName) params.append('given', args.firstName);
-    if (args.birthDate) params.append('birthdate', args.birthDate);
+    try {
+      const params = new URLSearchParams();
+      if (args.lastName) params.append('family', args.lastName);
+      if (args.firstName) params.append('given', args.firstName);
+      if (args.birthDate) params.append('birthdate', args.birthDate);
+      if (args.gender) params.append('gender', args.gender);
 
-    const response = await this.client.get(`/Patient?${params}`);
-    
-    // Check if we have results
-    if (!response.data?.entry?.[0]?.resource) {
-        return this.formatResponse("fhir://Patient/search", { message: "No patients found" });
+      const response = await this.client.get(`/Patient?${params}`);
+      
+      // Check if we have results
+      if (!response.data?.entry?.[0]?.resource) {
+          return this.formatResponse("fhir://Patient/search", { message: "No patients found" });
+      }
+
+      const resource = response.data.entry[0].resource;
+      const name = resource.name?.[0] ?? {};
+      const address = resource.address?.[0] ?? {};
+
+      const patient = {
+          name: name.given?.[0] ?? 'Unknown',
+          familyName: name.family ?? 'Unknown',
+          dob: resource.birthDate ?? 'Unknown',
+          gender: resource.gender ?? 'Unknown',
+          address: address.line?.[0] ?? 'Unknown',
+          city: address.city ?? 'Unknown',
+          state: address.state ?? 'Unknown',
+          zip: address.postalCode ?? 'Unknown',
+          id: resource.id ?? 'Unknown'
+      };
+
+      return this.formatResponse("fhir://Patient/search", patient);
+    } catch (error) {
+      console.error("Error finding patient:", error);
+      return this.handleError(error);
     }
-
-    const resource = response.data.entry[0].resource;
-    const name = resource.name?.[0] ?? {};
-    const address = resource.address?.[0] ?? {};
-
-    const patient = {
-        name: name.given?.[0] ?? 'Unknown',
-        familyName: name.family ?? 'Unknown',
-        dob: resource.birthDate ?? 'Unknown',
-        gender: resource.gender ?? 'Unknown',
-        address: address.line?.[0] ?? 'Unknown',
-        city: address.city ?? 'Unknown',
-        state: address.state ?? 'Unknown',
-        zip: address.postalCode ?? 'Unknown',
-        id: resource.id ?? 'Unknown'
-    };
-
-    return this.formatResponse("fhir://Patient/search", patient);
   }
 
-
   handleError(error: any) {
-    const errorMessage = axios.isAxiosError(error)
-      ? `FHIR API error: ${error.response?.data?.issue?.[0]?.details?.text ?? error.message}`
-      : error.message;
+    let errorMessage = "Unknown error occurred";
+    
+    if (axios.isAxiosError(error)) {
+      // HAPI FHIR typically returns OperationOutcome resource for errors
+      if (error.response?.data?.resourceType === 'OperationOutcome' && error.response.data.issue?.length > 0) {
+        // Extract error details from OperationOutcome
+        errorMessage = `FHIR API error: ${error.response.data.issue.map((i: any) => 
+          `[${i.severity}] ${i.diagnostics || i.details?.text || i.code}`
+        ).join('; ')}`;
+      } else {
+        // Fallback to standard error message
+        errorMessage = `FHIR API error: ${error.response?.data?.issue?.[0]?.details?.text ?? error.message}`;
+      }
+    } else if (error.message) {
+      errorMessage = error.message;
+    }
+    
     return { content: [{ type: "text", text: errorMessage }], isError: true };
   }
 
@@ -101,245 +150,334 @@ export class FhirClient {
   }
 
   private formatResponse(uri: string, data: any) {
-    
     return {
         content: [{
             type: "text",
             text: JSON.stringify(data, null, 2)
         }]
-    }
+    };
   }
 
   async getPatientObservations(args: any) {
-    const params = new URLSearchParams();
-    params.append('patient', `${args.patientId}`);
-    if (args.code) params.append('code', args.code);
-    if (args.status) params.append('status', args.status);
-    if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
-    if (args.dateTo) params.append('date', `le${args.dateTo}`);
+    try {
+      const params = new URLSearchParams();
+      params.append('patient', `${args.patientId}`);
+      if (args.code) params.append('code', args.code);
+      if (args.status) params.append('status', args.status);
+      if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
+      if (args.dateTo) params.append('date', `le${args.dateTo}`);
 
-    const response = await this.client.get(`/Observation?${params}`);
-    return this.formatResponse(`fhir://Patient/${args.patientId}/observations`, response.data);
+      const response = await this.client.get(`/Observation?${params}`);
+      return this.formatResponse(`fhir://Patient/${args.patientId}/observations`, response.data);
+    } catch (error) {
+      console.error("Error getting patient observations:", error);
+      return this.handleError(error);
+    }
   }
 
   async getPatientConditions(args: any) {
-    const params = new URLSearchParams();
-    params.append('patient', `${args.patientId}`);
-    if (args.status) params.append('clinical-status', args.status);
-    if (args.onsetDate) params.append('onset-date', args.onsetDate);
+    try {
+      const params = new URLSearchParams();
+      params.append('patient', `${args.patientId}`);
+      if (args.status) params.append('clinical-status', args.status);
+      if (args.onsetDate) params.append('onset-date', args.onsetDate);
 
-    const response = await this.client.get(`/Condition?${params}`);
-    return this.formatResponse(`fhir://Patient/${args.patientId}/conditions`, response.data);
+      const response = await this.client.get(`/Condition?${params}`);
+      return this.formatResponse(`fhir://Patient/${args.patientId}/conditions`, response.data);
+    } catch (error) {
+      console.error("Error getting patient conditions:", error);
+      return this.handleError(error);
+    }
   }
 
   async getPatientMedications(args: any) {
-    const params = new URLSearchParams();
-    params.append('patient', `${args.patientId}`);
-    if (args.status) params.append('status', args.status);
+    try {
+      const params = new URLSearchParams();
+      params.append('patient', `${args.patientId}`);
+      if (args.status) params.append('status', args.status);
 
-    const response = await this.client.get(`/MedicationRequest?${params}`);
-    return this.formatResponse(`fhir://Patient/${args.patientId}/medications`, response.data);
+      const response = await this.client.get(`/MedicationRequest?${params}`);
+      return this.formatResponse(`fhir://Patient/${args.patientId}/medications`, response.data);
+    } catch (error) {
+      console.error("Error getting patient medications:", error);
+      return this.handleError(error);
+    }
   }
 
   async getPatientEncounters(args: any) {
-    const params = new URLSearchParams();
-    params.append('patient', `${args.patientId}`);
-    if (args.status) params.append('status', args.status);
-    if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
-    if (args.dateTo) params.append('date', `le${args.dateTo}`);
+    try {
+      const params = new URLSearchParams();
+      params.append('patient', `${args.patientId}`);
+      if (args.status) params.append('status', args.status);
+      if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
+      if (args.dateTo) params.append('date', `le${args.dateTo}`);
 
-    const response = await this.client.get(`/Encounter?${params}`);
-    return this.formatResponse(`fhir://Patient/${args.patientId}/encounters`, response.data);
+      const response = await this.client.get(`/Encounter?${params}`);
+      return this.formatResponse(`fhir://Patient/${args.patientId}/encounters`, response.data);
+    } catch (error) {
+      console.error("Error getting patient encounters:", error);
+      return this.handleError(error);
+    }
   }
 
   async getPatientAllergies(args: any) {
-    const params = new URLSearchParams();
-    params.append('patient', args.patientId);
-    if (args.status) params.append('clinical-status', args.status);
-    if (args.type) params.append('type', args.type);
-    if (args.category) params.append('category', args.category);
+    try {
+      const params = new URLSearchParams();
+      params.append('patient', args.patientId);
+      if (args.status) params.append('clinical-status', args.status);
+      if (args.type) params.append('type', args.type);
+      if (args.category) params.append('category', args.category);
 
-    const response = await this.client.get(`/AllergyIntolerance?${params}`);
-    return this.formatResponse(`fhir://Patient/${args.patientId}/allergies`, response.data);
+      const response = await this.client.get(`/AllergyIntolerance?${params}`);
+      return this.formatResponse(`fhir://Patient/${args.patientId}/allergies`, response.data);
+    } catch (error) {
+      console.error("Error getting patient allergies:", error);
+      return this.handleError(error);
+    }
   }
 
   async getPatientProcedures(args: any) {
-    const params = new URLSearchParams();
-    params.append('patient', `${args.patientId}`);
-    if (args.status) params.append('status', args.status);
-    if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
-    if (args.dateTo) params.append('date', `le${args.dateTo}`);
+    try {
+      const params = new URLSearchParams();
+      params.append('patient', `${args.patientId}`);
+      if (args.status) params.append('status', args.status);
+      if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
+      if (args.dateTo) params.append('date', `le${args.dateTo}`);
 
-    const response = await this.client.get(`/Procedure?${params}`);
-    return this.formatResponse(`fhir://Patient/${args.patientId}/procedures`, response.data);
+      const response = await this.client.get(`/Procedure?${params}`);
+      return this.formatResponse(`fhir://Patient/${args.patientId}/procedures`, response.data);
+    } catch (error) {
+      console.error("Error getting patient procedures:", error);
+      return this.handleError(error);
+    }
   }
 
   async getPatientCareTeam(args: any) {
-    const params = new URLSearchParams();
-    params.append('patient', `${args.patientId}`);
-    if (args.status) params.append('status', args.status);
+    try {
+      const params = new URLSearchParams();
+      params.append('patient', `${args.patientId}`);
+      if (args.status) params.append('status', args.status);
 
-    const response = await this.client.get(`/CareTeam?${params}`);
-    return this.formatResponse(`fhir://Patient/${args.patientId}/careteam`, response.data);
+      const response = await this.client.get(`/CareTeam?${params}`);
+      return this.formatResponse(`fhir://Patient/${args.patientId}/careteam`, response.data);
+    } catch (error) {
+      console.error("Error getting patient care team:", error);
+      return this.handleError(error);
+    }
   }
 
   async getPatientCarePlans(args: any) {
-    const params = new URLSearchParams();
-    params.append('patient', `${args.patientId}`);
-    if (args.status) params.append('status', args.status);
-    if (args.category) params.append('category', args.category);
-    if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
-    if (args.dateTo) params.append('date', `le${args.dateTo}`);
+    try {
+      const params = new URLSearchParams();
+      params.append('patient', `${args.patientId}`);
+      if (args.status) params.append('status', args.status);
+      if (args.category) params.append('category', args.category);
+      if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
+      if (args.dateTo) params.append('date', `le${args.dateTo}`);
 
-    const response = await this.client.get(`/CarePlan?${params}`);
-    return this.formatResponse(`fhir://Patient/${args.patientId}/careplans`, response.data);
+      const response = await this.client.get(`/CarePlan?${params}`);
+      return this.formatResponse(`fhir://Patient/${args.patientId}/careplans`, response.data);
+    } catch (error) {
+      console.error("Error getting patient care plans:", error);
+      return this.handleError(error);
+    }
   }
 
   async getPatientVitalSigns(args: any) {
-    const params = new URLSearchParams();
-    params.append('patient', `${args.patientId}`);
-    if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
-    if (args.dateTo) params.append('date', `le${args.dateTo}`);
+    try {
+      const params = new URLSearchParams();
+      params.append('patient', `${args.patientId}`);
+      params.append('category', 'vital-signs');
+      if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
+      if (args.dateTo) params.append('date', `le${args.dateTo}`);
 
-    const response = await this.client.get(`/Observation?${params}`);
-    return this.formatResponse(`fhir://Patient/${args.patientId}/vital-signs`, response.data);
+      const response = await this.client.get(`/Observation?${params}`);
+      return this.formatResponse(`fhir://Patient/${args.patientId}/vital-signs`, response.data);
+    } catch (error) {
+      console.error("Error getting patient vital signs:", error);
+      return this.handleError(error);
+    }
   }
 
   async getMedicationHistory(args: any) {
-    const params = new URLSearchParams();
-    params.append('patient', `${args.patientId}`);
-    if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
-    if (args.dateTo) params.append('date', `le${args.dateTo}`);
+    try {
+      const params = new URLSearchParams();
+      params.append('patient', `${args.patientId}`);
+      if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
+      if (args.dateTo) params.append('date', `le${args.dateTo}`);
 
-    const response = await this.client.get(`/MedicationStatement?${params}`);
-    return this.formatResponse(`fhir://Patient/${args.patientId}/medication-history`, response.data);
+      const response = await this.client.get(`/MedicationStatement?${params}`);
+      return this.formatResponse(`fhir://Patient/${args.patientId}/medication-history`, response.data);
+    } catch (error) {
+      console.error("Error getting medication history:", error);
+      return this.handleError(error);
+    }
   }
 
   async getPatientLabResults(args: any) {
-    const params = new URLSearchParams();
-    params.append('patient', `${args.patientId}`);
-    if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
-    if (args.dateTo) params.append('date', `le${args.dateTo}`);
+    try {
+      const params = new URLSearchParams();
+      params.append('patient', `${args.patientId}`);
+      params.append('category', 'laboratory');
+      if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
+      if (args.dateTo) params.append('date', `le${args.dateTo}`);
 
-    const response = await this.client.get(`/Observation?${params}`);
-    return this.formatResponse(`fhir://Patient/${args.patientId}/lab-results`, response.data);
+      const response = await this.client.get(`/Observation?${params}`);
+      return this.formatResponse(`fhir://Patient/${args.patientId}/lab-results`, response.data);
+    } catch (error) {
+      console.error("Error getting patient lab results:", error);
+      return this.handleError(error);
+    }
   }
-  async getPatientAppointments(args: any) {
-    const params = new URLSearchParams();
-    params.append('patient', `${args.patientId}`);
-    if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
-    if (args.dateTo) params.append('date', `le${args.dateTo}`);
 
-    const response = await this.client.get(`/Appointment?${params}`);
-    return this.formatResponse(`fhir://Patient/${args.patientId}/appointments`, response.data);
+  async getPatientAppointments(args: any) {
+    try {
+      const params = new URLSearchParams();
+      params.append('patient', `${args.patientId}`);
+      if (args.dateFrom) params.append('date', `ge${args.dateFrom}`);
+      if (args.dateTo) params.append('date', `le${args.dateTo}`);
+
+      const response = await this.client.get(`/Appointment?${params}`);
+      return this.formatResponse(`fhir://Patient/${args.patientId}/appointments`, response.data);
+    } catch (error) {
+      console.error("Error getting patient appointments:", error);
+      return this.handleError(error);
+    }
   }
 
   async getVitalSigns(patientId: string, timeframe?: string) {
-    const parms: Record<string, string> = {
-      patient: patientId,
-      category: 'vital-signs',
-      _sort: '-date',
-      _count: '50'
-    };
-  
-    if (timeframe) {
-      const date = calculateTimeframeDate(timeframe);
-      if (date) {
-        parms["date"] = `ge${date}`;
+    try {
+      const params: Record<string, string> = {
+        patient: patientId,
+        category: 'vital-signs',
+        _sort: '-date',
+        _count: '50'
+      };
+    
+      if (timeframe) {
+        const date = calculateTimeframeDate(timeframe);
+        if (date) {
+          params["date"] = `ge${date}`;
+        }
       }
-    }  
-    return await this.client.get(`/Observation?${parms}`);
+      
+      const response = await this.client.get(`/Observation?${new URLSearchParams(params)}`);
+      return response.data;
+    } catch (error) {
+      console.error("Error getting vital signs:", error);
+      throw error;
+    }
   }
 
   async getPatientSummaryData(patientId: string) {
-    const [
-      patient,
-      conditions,
-      medications,
-      allergies,
-      immunizations,
-      procedures,
-      carePlans,
-      recentLabs,
-      encounters,
-      appointments
-    ] = await Promise.all([
-      this.get("Patient", patientId),
-      this.search("Condition", { patient: patientId }),
-      this.search("MedicationRequest", { patient: patientId}),
-      this.search("AllergyIntolerance", { patient: patientId }),
-      this.search("Immunization", { patient: patientId }),
-      this.search("Procedure", { patient: patientId }),
-      this.search("CarePlan", { patient: patientId}),
-      this.getPatientLabData(patientId),
-      this.search("Encounter", { patient: patientId }),
-      this.search("Appointment", { patient: patientId })
-    ]);
+    try {
+      const [
+        patient,
+        conditions,
+        medications,
+        allergies,
+        immunizations,
+        procedures,
+        carePlans,
+        recentLabs,
+        encounters,
+        appointments
+      ] = await Promise.all([
+        this.get("Patient", patientId),
+        this.search("Condition", { patient: patientId }),
+        this.search("MedicationRequest", { patient: patientId}),
+        this.search("AllergyIntolerance", { patient: patientId }),
+        this.search("Immunization", { patient: patientId }),
+        this.search("Procedure", { patient: patientId }),
+        this.search("CarePlan", { patient: patientId}),
+        this.getPatientLabData(patientId),
+        this.search("Encounter", { patient: patientId }),
+        this.search("Appointment", { patient: patientId })
+      ]);
 
-    return {
-      patient,
-      conditions,
-      medications,
-      allergies,
-      immunizations,
-      procedures,
-      carePlans,
-      recentLabs,
-      encounters,
-      appointments
-    };
+      return {
+        patient,
+        conditions,
+        medications,
+        allergies,
+        immunizations,
+        procedures,
+        carePlans,
+        recentLabs,
+        encounters,
+        appointments
+      };
+    } catch (error) {
+      console.error("Error getting patient summary data:", error);
+      throw error;
+    }
   }
   
   // Additional helper functions for other prompts
   async getPatientConditionData(patientId: string, timeframe?: string) {
-    const searchParams: Record<string, string> = { 
-      patient: patientId,
-      _sort: "date"
-    };
-    
-    if (timeframe) {
-      const date = calculateTimeframeDate(timeframe);
-      if (date) {
-        searchParams["date"] = `ge${date}`;
+    try {
+      const searchParams: Record<string, string> = { 
+        patient: patientId,
+        _sort: "date"
+      };
+      
+      if (timeframe) {
+        const date = calculateTimeframeDate(timeframe);
+        if (date) {
+          searchParams["date"] = `ge${date}`;
+        }
       }
+    
+      return await this.search("Condition", searchParams);
+    } catch (error) {
+      console.error("Error getting patient condition data:", error);
+      throw error;
     }
-  
-    return await this.search("Condition", searchParams);
   }
   
   async getPatientLabData(patientId: string, labType?: string) {
-    const searchParams: Record<string, string> = {
-      patient: patientId,
-      category: "laboratory",
-      _sort: "-date"
-    };
-  
-    if (labType) {
-      searchParams["code"] = labType;
+    try {
+      const searchParams: Record<string, string> = {
+        patient: patientId,
+        category: "laboratory",
+        _sort: "-date"
+      };
+    
+      if (labType) {
+        searchParams["code"] = labType;
+      }
+    
+      return await this.search("Observation", searchParams);
+    } catch (error) {
+      console.error("Error getting patient lab data:", error);
+      throw error;
     }
-  
-    return await this.search("Observation", searchParams);
   }
   
-  async  getPatientCareGapsData(patientId: string) {
-    const [
-      patient,
-      immunizations,
-      procedures,
-      carePlans
-    ] = await Promise.all([
-      this.get("Patient", patientId),
-      this.search("Immunization", { patient: patientId }),
-      this.search("Procedure", { patient: patientId }),
-      this.search("CarePlan", { patient: patientId, status: "active" })
-    ]);
-  
-    return {
-      patient,
-      immunizations,
-      procedures,
-      carePlans
-    };
+  async getPatientCareGapsData(patientId: string) {
+    try {
+      const [
+        patient,
+        immunizations,
+        procedures,
+        carePlans
+      ] = await Promise.all([
+        this.get("Patient", patientId),
+        this.search("Immunization", { patient: patientId }),
+        this.search("Procedure", { patient: patientId }),
+        this.search("CarePlan", { patient: patientId, status: "active" })
+      ]);
+    
+      return {
+        patient,
+        immunizations,
+        procedures,
+        carePlans
+      };
+    } catch (error) {
+      console.error("Error getting patient care gaps data:", error);
+      throw error;
+    }
   }
     
   getRelevantMetrics(observations: any[], condition: any): string[] {
@@ -366,10 +504,4 @@ export class FhirClient {
         return `${name}: ${value} ${unit} (${date})`;
       });
   }
-
-  
-  
-  
-
 }
-
